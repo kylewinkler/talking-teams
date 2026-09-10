@@ -1,0 +1,25 @@
+name: lineup advisor
+
+on:
+  schedule:
+    # 12:30 UTC ~ 8:30am ET — after overnight injury news, and well before 1pm kickoffs on Sundays.
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  advise:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: test
+        run: node --test
+
+      - name: advise
+        run: node advise.mjs
+        env:
+          MAKAVELI_WEBHOOK_URL: ${{ secrets.MAKAVELI_WEBHOOK_URL }}

@@ -1,0 +1,37 @@
+{
+  "league_id": "1365040201818214400",
+  "teams": {
+    "1": "NYG",
+    "2": "LAR",
+    "3": "BUF",
+    "4": "GB",
+    "5": "KC",
+    "6": "PHI",
+    "7": "CHI",
+    "8": "MIN",
+    "9": "BAL",
+    "10": "NE",
+    "11": "CAR",
+    "12": "ATL"
+  },
+  "commissioners": [
+    {
+      "name": "Kyle",
+      "sleeper_user": "winksahoy",
+      "division": 2,
+      "discord_id": null
+    },
+    {
+      "name": "David",
+      "sleeper_user": "TenKaura",
+      "division": 1,
+      "discord_id": null
+    },
+    {
+      "name": "Tyler",
+      "sleeper_user": "TeeFlesh",
+      "division": 3,
+      "discord_id": null
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+name: roster sync
+
+on:
+  schedule:
+    # 13:00 UTC ~ 9am ET. NFL transactions settle overnight, so a morning check catches yesterday.
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Cheap, and stops a broken commit from posting nonsense to the league channel.
+      - name: test
+        run: node --test test/sync.test.mjs
+
+      - name: sync
+        run: node sync.mjs
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

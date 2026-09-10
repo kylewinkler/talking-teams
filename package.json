@@ -1,0 +1,18 @@
+{
+  "name": "talking-teams",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sleeper automation: keeps an NFL-mirror league in sync, and advises lineups in a start/sit league.",
+  "scripts": {
+    "test": "node --test",
+    "sync": "node sync.mjs",
+    "sync:dry": "node sync.mjs --dry-run",
+    "advise": "node advise.mjs",
+    "advise:dry": "node advise.mjs --dry-run",
+    "bootstrap": "node scripts/bootstrap.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
