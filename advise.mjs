@@ -305,7 +305,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  for (const part of chunk(body)) await post(webhook, part);
+  for (const part of chunk(body)) await post(webhook, { content: part });
   console.log(`Posted: ${must.length} must-fix, ${changes.length} change(s), +${gain.toFixed(1)} proj.`);
 }
 

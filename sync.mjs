@@ -142,8 +142,10 @@ export function inferTeam(playerIds = [], players) {
 
 /* --------------------------------------------------------------- report ---- */
 
-const ADD = '➕';
-const DROP = '➖';
+// Bold signs rather than the ➕/➖ emoji, which Discord draws as heavy grey boxes. The minus is
+// U+2212, not a hyphen, so it matches the plus's width and can't be read as a markdown list bullet.
+const ADD = '**+**';
+const DROP = '**−**';
 
 /**
  * Discord only turns `<@…>` into a real ping for a numeric snowflake id. A username tag like
@@ -158,37 +160,47 @@ export function mentionFor(commissioner) {
   return SNOWFLAKE.test(id) ? `<@${id}>` : (commissioner.name ?? '');
 }
 
-export function playerLabel(id, players) {
+/**
+ * "Nate Carter · RB", plus his live injury designation when there is one — worth knowing when you
+ * are adding a hurt player, and pure noise on one who is leaving, hence `injury: false`.
+ */
+export function playerLabel(id, players, { injury = true } = {}) {
   const p = players[id];
   if (!p) return `Unknown player \`${id}\``;
-  const name = [p.first_name, p.last_name].filter(Boolean).join(' ') || id;
-  const pos = p.fantasy_positions?.[0] ?? p.position ?? '?';
-  // Live injury designation, so an add that is stashing a hurt player says so up front.
-  const injured = p.injury_status && p.injury_status !== 'NA' ? `, ${p.injury_status}` : '';
-  return `${name} (${pos}${injured})`;
+  const bits = [
+    [p.first_name, p.last_name].filter(Boolean).join(' ') || id,
+    p.fantasy_positions?.[0] ?? p.position ?? '?',
+  ];
+  if (injury && p.injury_status && p.injury_status !== 'NA') bits.push(p.injury_status);
+  return bits.join(' · ');
 }
 
 /**
- * Renders one block of lines per division that has work. Divisions with nothing to do are omitted
- * entirely, which is the whole of the "don't be noisy" mechanism — when every roster is already
- * correct this returns an empty map and the run posts nothing at all.
+ * Groups the day's work by division: one entry per division with anything to say, holding a
+ * section per affected team. Divisions with nothing to do are left out entirely, which is the
+ * whole of the "don't be noisy" mechanism — a fully synced league returns an empty map and the run
+ * posts nothing.
+ *
+ * `actionable` is false for a division whose only content is an FYI about a move another
+ * commissioner owns: it still gets a card, so nobody wonders why a roster looks short, but its
+ * commissioner isn't pinged for work that isn't theirs.
  */
 export function buildDivisionReports({ moves, warnings, rosters, players, config, ctx }) {
   const byId = new Map(rosters.map((r) => [r.roster_id, r]));
   const divOf = (rosterId) => byId.get(rosterId)?.settings?.division ?? 0;
-  const label = (rosterId) => {
-    const nfl = config.teams[String(rosterId)] ?? '??';
-    const mgr = ctx.managerOf.get(rosterId);
-    return mgr ? `**${nfl}** (${mgr})` : `**${nfl}**`;
-  };
+  const nflOf = (rosterId) => config.teams[String(rosterId)] ?? '??';
+  const mgrOf = (rosterId) => ctx.managerOf.get(rosterId);
+  // "KC · JohnSchutz" as a section heading; "**KC** (JohnSchutz)" when named mid-sentence.
+  const heading = (rosterId) => (mgrOf(rosterId) ? `${nflOf(rosterId)} · ${mgrOf(rosterId)}` : nflOf(rosterId));
+  const inline = (rosterId) => `**${nflOf(rosterId)}**${mgrOf(rosterId) ? ` (${mgrOf(rosterId)})` : ''}`;
 
-  const blocks = new Map(); // division -> { teams: Map<rosterId, string[]>, fyi: string[] }
-  const block = (d) => {
-    if (!blocks.has(d)) blocks.set(d, { teams: new Map(), fyi: [] });
-    return blocks.get(d);
+  const divisions = new Map(); // division -> { teams: Map<rosterId, string[]>, fyi: string[] }
+  const division = (d) => {
+    if (!divisions.has(d)) divisions.set(d, { teams: new Map(), fyi: [] });
+    return divisions.get(d);
   };
   const teamLines = (d, rosterId) => {
-    const t = block(d).teams;
+    const t = division(d).teams;
     if (!t.has(rosterId)) t.set(rosterId, []);
     return t.get(rosterId);
   };
@@ -200,47 +212,48 @@ export function buildDivisionReports({ moves, warnings, rosters, players, config
     const owner = owningRoster(m);
     const div = divOf(owner);
     const who = playerLabel(m.playerId, players);
+    const leaving = playerLabel(m.playerId, players, { injury: false });
 
     if (m.kind === 'add') {
-      // Not "free agent": in a league built on NFL rosters that reads as "has no NFL team",
-      // which is the opposite of why he is being added.
-      teamLines(div, owner).push(`${ADD} ${who} — on ${config.teams[String(owner)]}, not on any league roster`);
+      // No explanation needed under a "KC" heading — adding a Chief says it all. The obvious tag,
+      // "free agent", reads as "has no NFL team", the opposite of why he's being added.
+      teamLines(div, owner).push(`${ADD} ${who}`);
     } else if (m.kind === 'transfer') {
-      teamLines(div, owner).push(`${ADD} ${who} — currently on ${label(m.from)}`);
+      teamLines(div, owner).push(`${ADD} ${who} · from ${inline(m.from)}`);
       // Cross-division: tell the losing side who owns it, so two commissioners don't both do it.
       const fromDiv = divOf(m.from);
       if (fromDiv !== div) {
         const owns = config.commissioners.find((c) => c.division === div);
-        block(fromDiv).fyi.push(
-          `· ${who} leaves ${label(m.from)} → ${owns?.name ?? `Division ${div}`} is handling it`,
+        division(fromDiv).fyi.push(
+          `${leaving} leaves ${inline(m.from)} → ${owns?.name ?? `Division ${div}`} is handling it`,
         );
       }
     } else {
       // Three different reasons a player no longer belongs, and they need telling apart: he moved
       // clubs, he left the NFL entirely, or Sleeper has stopped treating the record as a real player.
       const p = players[m.playerId];
-      const mapped = config.teams[String(owner)];
       let reason;
-      if (!p?.team) reason = 'no longer on an NFL roster';
-      else if (p.team !== mapped) reason = `now on ${p.team}`;
-      else reason = `still listed on ${mapped} but flagged inactive by Sleeper`;
-      teamLines(div, owner).push(`${DROP} ${who} — ${reason}`);
+      if (!p?.team) reason = 'left the NFL';
+      else if (p.team !== nflOf(owner)) reason = `now on ${p.team}`;
+      else reason = 'flagged inactive by Sleeper';
+      teamLines(div, owner).push(`${DROP} ${leaving} · ${reason}`);
     }
   }
 
   const out = new Map();
-  for (const [div, { teams, fyi }] of [...blocks].sort((a, b) => a[0] - b[0])) {
-    const mention = mentionFor(config.commissioners.find((c) => c.division === div));
+  for (const [div, { teams, fyi }] of [...divisions].sort((a, b) => a[0] - b[0])) {
+    const commissioner = config.commissioners.find((c) => c.division === div) ?? null;
     const name = ctx.divisionNames[div] ?? `Division ${div}`;
-
-    const lines = [`🏈 **${name}** · ${mention}`.trim(), ''];
-    for (const [rosterId, ls] of [...teams].sort((a, b) => a[0] - b[0])) {
-      lines.push(label(rosterId), ...ls.map((l) => ` ${l}`), '');
-    }
-    if (fyi.length) {
-      lines.push('_No action needed — handled elsewhere:_', ...fyi.map((l) => ` ${l}`));
-    }
-    out.set(div, lines.join('\n').trim());
+    out.set(div, {
+      division: div,
+      title: commissioner ? `${name} · ${commissioner.name}` : name,
+      commissioner,
+      actionable: teams.size > 0,
+      teams: [...teams]
+        .sort((a, b) => a[0] - b[0])
+        .map(([rosterId, lines]) => ({ name: heading(rosterId), lines })),
+      fyi,
+    });
   }
   return out;
 }
@@ -260,11 +273,89 @@ export function chunk(text, limit = 1900) {
   return parts;
 }
 
-export async function post(webhook, content) {
+// Division card colors, from Discord's own palette so they sit naturally in light and dark themes.
+const DIVISION_COLORS = { 1: 0x5865f2, 2: 0xf0b232, 3: 0x57f287 };
+const NEUTRAL = 0x99aab5;
+
+// Past any of these Discord rejects the entire post; it does not truncate.
+const LIMIT = { fieldValue: 1024, fields: 25, embeds: 10, chars: 6000 };
+const embedChars = (e) =>
+  e.title.length + e.fields.reduce((t, f) => t + f.name.length + f.value.length, 0);
+
+/**
+ * Renders the division reports as webhook messages: one color-coded card per division, with the
+ * pings on a plain line above them — a mention inside an embed renders but never notifies anyone.
+ *
+ * A heavy day spills over rather than failing: a team too long for one field continues in the
+ * next, a division too big for one card continues in another, and cards past one message's budget
+ * go in a second message. Only the first message carries the pings.
+ */
+export function discordPayloads(reports, header) {
+  const cards = [];
+  for (const r of reports.values()) {
+    const fields = [];
+    const section = (name, lines) =>
+      chunk(lines.join('\n'), LIMIT.fieldValue).forEach((value, i) =>
+        fields.push({ name: i ? `${name} (cont.)` : name, value }),
+      );
+    for (const t of r.teams) section(t.name, t.lines);
+    if (r.fyi.length) section('No action needed — handled elsewhere', r.fyi);
+
+    let card = null;
+    for (const f of fields) {
+      const full =
+        card &&
+        (card.fields.length === LIMIT.fields ||
+          embedChars(card) + f.name.length + f.value.length > LIMIT.chars);
+      if (!card || full) {
+        const title = card ? `${r.title} (cont.)` : r.title;
+        card = { title, color: DIVISION_COLORS[r.division] ?? NEUTRAL, fields: [] };
+        cards.push(card);
+      }
+      card.fields.push(f);
+    }
+  }
+
+  const messages = [];
+  for (const card of cards) {
+    const last = messages.at(-1);
+    const fits =
+      last &&
+      last.embeds.length < LIMIT.embeds &&
+      last.embeds.reduce((t, e) => t + embedChars(e), 0) + embedChars(card) <= LIMIT.chars;
+    if (fits) last.embeds.push(card);
+    else messages.push({ embeds: [card] });
+  }
+
+  const pings = [...reports.values()]
+    .filter((r) => r.actionable && r.commissioner)
+    .map((r) => mentionFor(r.commissioner));
+  if (messages.length) {
+    messages[0].content = [[...new Set(pings)].join(' '), header].filter(Boolean).join(' — ');
+  }
+  return messages;
+}
+
+/** Plain-text view of a webhook message, so a dry run shows exactly what would be sent. */
+export function describe(message) {
+  const out = [];
+  if (message.content) out.push(message.content, '');
+  for (const e of message.embeds ?? []) {
+    out.push(`┃ ${e.title}   [#${e.color.toString(16).padStart(6, '0')}]`);
+    for (const f of e.fields) {
+      out.push('┃', `┃ ${f.name}`, ...f.value.split('\n').map((l) => `┃   ${l}`));
+    }
+    out.push('');
+  }
+  return out.join('\n').trimEnd();
+}
+
+export async function post(webhook, message) {
   const res = await fetch(webhook, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ content, allowed_mentions: { parse: ['users'] } }),
+    // Only user mentions may ping — never @everyone or a role, whatever ends up in the text.
+    body: JSON.stringify({ allowed_mentions: { parse: ['users'] }, ...message }),
   });
   if (!res.ok) throw new Error(`Discord webhook -> ${res.status} ${await res.text()}`);
 }
@@ -334,15 +425,15 @@ async function main() {
   const ctx = { managerOf, divisionNames };
   const reports = buildDivisionReports({ moves, warnings, rosters, players, config, ctx });
 
-  const header = `Roster sync — ${state.season} week ${state.week}`;
+  const week = `${state.season} week ${state.week}`;
   if (reports.size === 0) {
-    console.log(`${header}: all ${rosters.length} rosters in sync, nothing to post.`);
+    console.log(`${week}: all ${rosters.length} rosters in sync, nothing to post.`);
     return;
   }
 
-  const messages = [...reports.values()].flatMap((r) => chunk(`${r}\n\n_${header}_`));
+  const messages = discordPayloads(reports, `roster moves · ${week}`);
   if (dryRun) {
-    console.log(messages.join('\n' + '─'.repeat(60) + '\n'));
+    console.log(messages.map(describe).join('\n\n' + '─'.repeat(60) + '\n\n'));
     console.log(`\n[dry run] ${moves.length} move(s), ${reports.size} division(s); nothing posted.`);
     return;
   }

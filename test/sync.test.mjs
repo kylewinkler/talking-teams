@@ -10,7 +10,9 @@ import {
   owningRoster,
   inferTeam,
   buildDivisionReports,
+  discordPayloads,
   mentionFor,
+  playerLabel,
   chunk,
 } from '../sync.mjs';
 
@@ -106,11 +108,12 @@ test('a cross-division transfer is owned by one commissioner and flagged to the 
   const reports = buildDivisionReports({ moves, warnings: [], rosters, players, config, ctx });
 
   // Kyle owns it: his division carries the actionable line.
-  assert.match(reports.get(1), /Blake Corum \(RB\).*currently on \*\*CHI\*\*/);
+  const kyle = reports.get(1).teams.flatMap((t) => t.lines).join('\n');
+  assert.match(kyle, /Blake Corum · RB · from \*\*CHI\*\*/);
   // Tyler is told, but only as an FYI naming who is handling it.
-  assert.match(reports.get(3), /No action needed/);
-  assert.match(reports.get(3), /Blake Corum .*Kyle is handling it/);
-  assert.doesNotMatch(reports.get(3), /➕ Blake Corum/);
+  const tyler = reports.get(3);
+  assert.match(tyler.fyi.join('\n'), /Blake Corum · RB leaves \*\*CHI\*\*.*Kyle is handling it/);
+  assert.equal(tyler.teams.flatMap((t) => t.lines).some((l) => l.includes('Blake Corum')), false);
 });
 
 test('a drop says which of the three reasons applies', () => {
@@ -125,10 +128,10 @@ test('a drop says which of the three reasons applies', () => {
     config: { teams: { 1: 'LAR' }, commissioners: [{ name: 'Kyle', division: 1 }] },
     ctx: { managerOf: new Map(), divisionNames: {} },
   });
-  const body = reports.get(1);
-  assert.match(body, /Kyren Williams \(RB\) — now on DEN/);
-  assert.match(body, /Gone Guy \(WR\) — no longer on an NFL roster/);
-  assert.match(body, /Duplicate Player \(WR\) — still listed on LAR but flagged inactive by Sleeper/);
+  const body = reports.get(1).teams.flatMap((t) => t.lines).join('\n');
+  assert.match(body, /Kyren Williams · RB · now on DEN/);
+  assert.match(body, /Gone Guy · WR · left the NFL/);
+  assert.match(body, /Duplicate Player · WR · flagged inactive by Sleeper/);
 });
 
 test('a fully synced league produces no report at all', () => {
@@ -163,4 +166,63 @@ test('chunk splits on line boundaries without dropping content', () => {
   const parts = chunk(text, 200);
   assert.ok(parts.every((p) => p.length <= 200));
   assert.equal(parts.join('\n'), text);
+});
+
+test('one card per division in its own color, pinging only commissioners with work', () => {
+  // Corum is a Ram sitting on the Bears roster; both rosters are otherwise complete. Kyle owns the
+  // transfer; Tyler's division gets only the FYI — a card, but no ping.
+  const rs = [
+    { roster_id: 1, settings: { division: 1 }, players: ['1', '2', '5', '8', 'LAR'] },
+    { roster_id: 2, settings: { division: 3 }, players: ['4', '7', 'CHI'] },
+  ];
+  const moves = planMoves(rs, desired);
+  assert.deepEqual(moves.map((m) => m.kind), ['transfer']);
+
+  const config = {
+    teams: { 1: 'LAR', 2: 'CHI' },
+    commissioners: [
+      { name: 'Kyle', division: 1, discord_id: '249294515666550785' },
+      { name: 'Tyler', division: 3, discord_id: '253648986089586698' },
+    ],
+  };
+  const ctx = { managerOf: new Map([[1, 'winksahoy'], [2, 'TeeFlesh']]), divisionNames: {} };
+  const reports = buildDivisionReports({ moves, warnings: [], rosters: rs, players, config, ctx });
+  const [message, ...rest] = discordPayloads(reports, 'roster moves · 2026 week 1');
+
+  assert.deepEqual(rest, []);
+  assert.equal(message.content, '<@249294515666550785> — roster moves · 2026 week 1');
+  assert.deepEqual(message.embeds.map((e) => e.title), ['Division 1 · Kyle', 'Division 3 · Tyler']);
+  assert.notEqual(message.embeds[0].color, message.embeds[1].color);
+  assert.equal(message.embeds[0].fields[0].name, 'LAR · winksahoy');
+  assert.equal(message.embeds[1].fields[0].name, 'No action needed — handled elsewhere');
+});
+
+test('a heavy day spills across fields, cards and messages instead of being rejected', () => {
+  // Discord refuses an oversized post outright, so a big churn day must be split, never truncated.
+  const lines = Array.from({ length: 60 }, (_, i) => `**+** Practice Squad Player ${i} · WR · Questionable`);
+  const teams = Array.from({ length: 4 }, (_, i) => ({ name: `T${i} · manager`, lines }));
+  const reports = new Map([
+    [2, { division: 2, title: 'Division 2 · Kyle', commissioner: { name: 'Kyle' }, actionable: true, teams, fyi: [] }],
+  ]);
+  const messages = discordPayloads(reports, 'roster moves · 2026 week 1');
+
+  const chars = (e) => e.title.length + e.fields.reduce((t, f) => t + f.name.length + f.value.length, 0);
+  for (const m of messages) {
+    assert.ok(m.embeds.length <= 10);
+    assert.ok(m.embeds.reduce((t, e) => t + chars(e), 0) <= 6000);
+    for (const e of m.embeds) {
+      assert.ok(e.fields.length <= 25);
+      for (const f of e.fields) assert.ok(f.value.length <= 1024);
+    }
+  }
+  const sent = messages.flatMap((m) => m.embeds.flatMap((e) => e.fields.flatMap((f) => f.value.split('\n'))));
+  assert.equal(sent.length, 4 * 60, 'no line may be lost');
+  assert.ok(messages.length > 1, 'this much should need a second message');
+  assert.ok(messages[0].content, 'the pings ride on the first message');
+  assert.equal(messages.slice(1).some((m) => m.content), false, 'and only the first');
+});
+
+test('injury tags show on players arriving, not on players leaving', () => {
+  assert.equal(playerLabel('8', players), 'Hurt Ram · TE · IR');
+  assert.equal(playerLabel('8', players, { injury: false }), 'Hurt Ram · TE');
 });

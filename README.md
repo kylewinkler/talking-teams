@@ -9,7 +9,8 @@ Keeps a 12-team Sleeper best-ball league in sync with reality, in a league where
 *is* a real NFL team** — the Rams manager rosters every eligible Ram and nobody else.
 
 Trades, signings, cuts and IR moves break that invariant constantly. This checks all twelve rosters
-once a day and posts each division's add/drop list to Discord.
+once a day and posts the add/drop list to Discord: one post, a color-coded card per division,
+pinging only the commissioners who actually have moves to make.
 
 ## It reports; it does not execute
 
