@@ -61,8 +61,8 @@ npm run sync       # post to Discord (needs DISCORD_WEBHOOK_URL)
 npm test           # the diff logic
 ```
 
-The GitHub Action runs daily at 13:00 UTC (~9am ET) and can be triggered by hand from the Actions
-tab. Note that **GitHub disables scheduled workflows after 60 days of repo inactivity** — worth
+The GitHub Action runs daily at 11:00 UTC — 6am CDT, or 5am CST once daylight saving ends — and can
+be triggered by hand from the Actions tab. Note that **GitHub disables scheduled workflows after 60 days of repo inactivity** — worth
 knowing for the offseason; any commit re-arms it.
 
 ## Who counts as a Ram

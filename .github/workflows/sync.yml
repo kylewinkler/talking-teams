@@ -2,8 +2,8 @@ name: roster sync
 
 on:
   schedule:
-    # 13:00 UTC ~ 9am ET. NFL transactions settle overnight, so a morning check catches yesterday.
-    - cron: '0 13 * * *'
+    # 11:00 UTC = 6am CDT. GitHub cron is fixed UTC with no DST, so from Nov 1 this fires at 5am CST.
+    - cron: '0 11 * * *'
   workflow_dispatch:
 
 jobs:
