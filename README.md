@@ -62,8 +62,9 @@ npm run sync       # post to Discord (needs DISCORD_WEBHOOK_URL)
 npm test           # the diff logic
 ```
 
-The GitHub Action runs daily at 11:00 UTC — 6am CDT, or 5am CST once daylight saving ends — and can
-be triggered by hand from the Actions tab. Note that **GitHub disables scheduled workflows after 60 days of repo inactivity** — worth
+The GitHub Action runs daily at 11:07 UTC — 6:07am CDT, or 5:07am CST once daylight saving ends —
+and can be triggered by hand from the Actions tab. GitHub's scheduler is best-effort: a run can
+arrive late, and occasionally not at all, which is why it avoids the congested top of the hour. Note that **GitHub disables scheduled workflows after 60 days of repo inactivity** — worth
 knowing for the offseason; any commit re-arms it.
 
 ## Who counts as a Ram
@@ -105,7 +106,7 @@ cut — that call is yours.
 # Lineup advisor (`advise.mjs`)
 
 A second, unrelated tool in the same repo, for **makaveli** — a 12-team dynasty superflex league
-where lineups actually matter. Runs daily at 12:30 UTC and posts to its own Discord webhook
+where lineups actually matter. Runs daily at 12:37 UTC (7:37am CDT) and posts to its own Discord webhook
 (`MAKAVELI_WEBHOOK_URL`). Silent when the lineup is already set and optimal.
 
 ```bash

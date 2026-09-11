@@ -2,8 +2,9 @@ name: roster sync
 
 on:
   schedule:
-    # 11:00 UTC = 6am CDT. GitHub cron is fixed UTC with no DST, so from Nov 1 this fires at 5am CST.
-    - cron: '0 11 * * *'
+    # 11:07 UTC = 6:07am CDT (5:07am CST from Nov 1 — GitHub cron is fixed UTC). Deliberately off the
+    # top of the hour: GitHub's scheduler is best-effort and delays, or drops, runs at :00 under load.
+    - cron: '7 11 * * *'
   workflow_dispatch:
 
 jobs:

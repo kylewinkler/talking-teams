@@ -2,8 +2,9 @@ name: lineup advisor
 
 on:
   schedule:
-    # 12:30 UTC ~ 8:30am ET — after overnight injury news, and well before 1pm kickoffs on Sundays.
-    - cron: '30 12 * * *'
+    # 12:37 UTC = 7:37am CDT — after overnight injury news, well before Sunday kickoffs. Off the
+    # round minutes, where GitHub's best-effort scheduler delays or drops runs under load.
+    - cron: '37 12 * * *'
   workflow_dispatch:
 
 jobs:
