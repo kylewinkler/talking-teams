@@ -10,6 +10,8 @@ import {
   findProblems,
   slotChanges,
   buildReport,
+  auditRoster,
+  startedTeams,
 } from '../advise.mjs';
 
 const P = {
@@ -145,4 +147,36 @@ test('ties are broken toward the lineup already set, so no churn is recommended'
   assert.equal(total, 30);
   assert.deepEqual(lineup, current, 'should leave the lineup untouched');
   assert.deepEqual(slotChanges(slots, current, lineup, P, (id) => pts[id]), []);
+});
+
+test('startedTeams treats anything but pre_game as under way', () => {
+  const games = [
+    { week: 1, home: 'LAR', away: 'SF', status: 'complete' },
+    { week: 1, home: 'CAR', away: 'CHI', status: 'pre_game' },
+    { week: 2, home: 'KC', away: 'DEN', status: 'complete' },
+  ];
+  assert.deepEqual([...startedTeams(games, 1)].sort(), ['LAR', 'SF']);
+});
+
+test('a player whose game has kicked off is left where he is', () => {
+  const league = { roster_positions: ['FLEX', 'BN'], scoring_settings: { rec: 1 } };
+  const roster = { starters: ['rb1'], players: ['rb1', 'wr1'] };
+  const projections = { rb1: { rec: 1 }, wr1: { rec: 30 } };
+  const base = { league, roster, players: P, projections, byes: new Set() };
+
+  const open = auditRoster({ ...base, started: new Set() });
+  assert.deepEqual(open.changes.map((c) => c.slot), ['FLEX'], 'before kickoff, swap him out');
+
+  // rb1 is on IND; once that game is under way Sleeper freezes the slot, so advice is unactionable.
+  const locked = auditRoster({ ...base, started: new Set(['IND']) });
+  assert.deepEqual(locked.changes, [], 'after kickoff, leave him alone');
+});
+
+test('no must-fix for a slot that has already kicked off', () => {
+  // Saquon (PHI) is Out — worth flagging beforehand, pure noise once the game is under way.
+  const league = { roster_positions: ['FLEX', 'BN'], scoring_settings: {} };
+  const roster = { starters: ['hurt'], players: ['hurt'] };
+  const base = { league, roster, players: P, projections: {}, byes: new Set() };
+  assert.equal(auditRoster({ ...base, started: new Set() }).must.length, 1);
+  assert.equal(auditRoster({ ...base, started: new Set(['PHI']) }).must.length, 0);
 });

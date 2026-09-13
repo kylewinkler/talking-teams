@@ -236,11 +236,24 @@ export function buildReport({ leagueName, week, must, watch, changes, currentTot
 
 /* ------------------------------------------------------------------ main ---- */
 
+/** Teams whose game this week has kicked off. Anything but `pre_game` counts as under way. */
+export function startedTeams(games, week) {
+  const out = new Set();
+  for (const g of games) {
+    if (g.week === week && g.status !== 'pre_game') { out.add(g.home); out.add(g.away); }
+  }
+  return out;
+}
+
 /**
  * Everything worth saying about one team's lineup in one league, so the multi-league loop below
  * stays a thin shell around it.
+ *
+ * Once a player's game kicks off Sleeper freezes him in his slot, so advice about him is not just
+ * useless but actively misleading — it reads as a move you failed to make. Slots holding a player
+ * who has already played are treated as settled, and only what can still move is optimised.
  */
-export function auditRoster({ league, roster, players, projections, byes }) {
+export function auditRoster({ league, roster, players, projections, byes, started = new Set() }) {
   const slots = league.roster_positions.filter((s) => !['BN', 'IR', 'TAXI'].includes(s));
   const scoring = league.scoring_settings ?? {};
 
@@ -253,12 +266,25 @@ export function auditRoster({ league, roster, players, projections, byes }) {
   };
 
   const starters = roster.starters ?? [];
-  const available = (roster.players ?? []).filter((id) => players[id]);
-  const problems = findProblems(slots, starters, players, byes);
-  const currentTotal = starters
-    .filter((id) => id && id !== '0')
-    .reduce((t, id) => t + points(id), 0);
-  const { lineup, total } = optimize(slots, available, players, points, starters);
+  const locked = (id) => Boolean(id) && id !== '0' && started.has(players[id]?.team);
+  const frozen = slots.map((_, i) => locked(starters[i]));
+  const openSlots = slots.filter((_, i) => !frozen[i]);
+  const openStarters = starters.filter((_, i) => !frozen[i]);
+  const candidates = (roster.players ?? []).filter((id) => players[id] && !locked(id));
+
+  // Settled points ride along in both totals, so the difference stays a like-for-like comparison.
+  const settled = starters.filter((_, i) => frozen[i]).reduce((t, id) => t + points(id), 0);
+  const problems = findProblems(openSlots, openStarters, players, byes);
+  const currentTotal =
+    settled + openStarters.filter((id) => id && id !== '0').reduce((t, id) => t + points(id), 0);
+
+  const { lineup: open, total: openTotal } = optimize(
+    openSlots, candidates, players, points, openStarters,
+  );
+  const total = settled + openTotal;
+
+  let k = 0;
+  const lineup = slots.map((_, i) => (frozen[i] ? starters[i] : open[k++]));
   // Below a tenth of a point the "improvement" is projection noise, not a decision worth a message.
   const changes =
     total - currentTotal >= 0.1 ? slotChanges(slots, starters, lineup, players, points) : [];
@@ -291,6 +317,7 @@ async function main() {
     schedule(state.season),
   ]);
   const byes = byeTeams(games, week);
+  const started = startedTeams(games, week);
 
   const bodies = [];
   for (const leagueId of config.leagues) {
@@ -303,7 +330,7 @@ async function main() {
       console.error(`no roster for user ${config.user_id} in ${league.name} — skipped`);
       continue;
     }
-    const audit = auditRoster({ league, roster, players, projections, byes });
+    const audit = auditRoster({ league, roster, players, projections, byes, started });
     const body = buildReport({ leagueName: league.name, week, ...audit });
     if (body) bodies.push(body);
     else console.log(`${league.name}: lineup is set and optimal (${audit.currentTotal.toFixed(1)} proj).`);
