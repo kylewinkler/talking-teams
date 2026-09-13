@@ -236,6 +236,42 @@ export function buildReport({ leagueName, week, must, watch, changes, currentTot
 
 /* ------------------------------------------------------------------ main ---- */
 
+/**
+ * Everything worth saying about one team's lineup in one league, so the multi-league loop below
+ * stays a thin shell around it.
+ */
+export function auditRoster({ league, roster, players, projections, byes }) {
+  const slots = league.roster_positions.filter((s) => !['BN', 'IR', 'TAXI'].includes(s));
+  const scoring = league.scoring_settings ?? {};
+
+  // A player who cannot take the field is worth zero, which keeps the optimiser from ever
+  // recommending someone the must-fix section is telling you to bench.
+  const points = (id) => {
+    const p = players[id];
+    if (!p || !p.team || byes.has(p.team) || WILL_NOT_PLAY.has(p.injury_status)) return 0;
+    return projectedPoints(projections[id], scoring);
+  };
+
+  const starters = roster.starters ?? [];
+  const available = (roster.players ?? []).filter((id) => players[id]);
+  const problems = findProblems(slots, starters, players, byes);
+  const currentTotal = starters
+    .filter((id) => id && id !== '0')
+    .reduce((t, id) => t + points(id), 0);
+  const { lineup, total } = optimize(slots, available, players, points, starters);
+  // Below a tenth of a point the "improvement" is projection noise, not a decision worth a message.
+  const changes =
+    total - currentTotal >= 0.1 ? slotChanges(slots, starters, lineup, players, points) : [];
+
+  return {
+    must: problems.filter((p) => p.level === 'must'),
+    watch: problems.filter((p) => p.level === 'watch'),
+    changes,
+    currentTotal,
+    total,
+  };
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
   const configPath = path.join(ROOT, 'advisor.json');
@@ -248,54 +284,40 @@ async function main() {
 
   const state = await api('/state/nfl');
   const week = state.week;
-  const [league, rosters, players, projections, games] = await Promise.all([
-    api(`/league/${config.league_id}`),
-    api(`/league/${config.league_id}/rosters`),
+  // Players, projections and the schedule are the same for every league: fetch once, reuse.
+  const [players, projections, games] = await Promise.all([
     api('/players/nfl'),
     api(`/projections/nfl/regular/${state.season}/${week}`),
     schedule(state.season),
   ]);
-
-  const mine = rosters.find((r) => r.owner_id === config.user_id);
-  if (!mine) throw new Error(`no roster for user ${config.user_id} in ${league.name}`);
-
-  const slots = league.roster_positions.filter((s) => !['BN', 'IR', 'TAXI'].includes(s));
   const byes = byeTeams(games, week);
-  const scoring = league.scoring_settings ?? {};
 
-  // A player who cannot take the field is worth zero, which keeps the optimiser from ever
-  // recommending someone the must-fix section is telling you to bench.
-  const points = (id) => {
-    const p = players[id];
-    if (!p || !p.team || byes.has(p.team) || WILL_NOT_PLAY.has(p.injury_status)) return 0;
-    return projectedPoints(projections[id], scoring);
-  };
+  const bodies = [];
+  for (const leagueId of config.leagues) {
+    const [league, rosters] = await Promise.all([
+      api(`/league/${leagueId}`),
+      api(`/league/${leagueId}/rosters`),
+    ]);
+    const roster = rosters.find((r) => r.owner_id === config.user_id);
+    if (!roster) {
+      console.error(`no roster for user ${config.user_id} in ${league.name} — skipped`);
+      continue;
+    }
+    const audit = auditRoster({ league, roster, players, projections, byes });
+    const body = buildReport({ leagueName: league.name, week, ...audit });
+    if (body) bodies.push(body);
+    else console.log(`${league.name}: lineup is set and optimal (${audit.currentTotal.toFixed(1)} proj).`);
+  }
 
-  const roster = (mine.players ?? []).filter((id) => players[id]);
-  const problems = findProblems(slots, mine.starters ?? [], players, byes);
-  const current = (mine.starters ?? []).filter((id) => id && id !== '0');
-  const currentTotal = current.reduce((t, id) => t + points(id), 0);
-  const starters = mine.starters ?? [];
-  const { lineup, total } = optimize(slots, roster, players, points, starters);
-  // Below a tenth of a point the "improvement" is projection noise, not a decision worth a message.
-  const worthDoing = total - currentTotal >= 0.1;
-  const changes = worthDoing ? slotChanges(slots, starters, lineup, players, points) : [];
-
-  const must = problems.filter((p) => p.level === 'must');
-  const watch = problems.filter((p) => p.level === 'watch');
-  const gain = total - currentTotal;
-
-  const body = buildReport({
-    leagueName: league.name, week, must, watch, changes, currentTotal, total,
-  });
-  if (body === null) {
-    console.log(`${league.name} week ${week}: lineup is set and optimal (${currentTotal.toFixed(1)} proj).`);
+  if (!bodies.length) {
+    console.log(`week ${week}: every lineup is set and optimal, nothing to post.`);
     return;
   }
 
+  const messages = bodies.flatMap((b) => chunk(b));
   if (dryRun) {
-    console.log(body);
-    console.log(`\n[dry run] ${must.length} must-fix, ${changes.length} change(s); nothing posted.`);
+    console.log(messages.join('\n\n' + '─'.repeat(60) + '\n\n'));
+    console.log(`\n[dry run] ${bodies.length} of ${config.leagues.length} league(s) need attention; nothing posted.`);
     return;
   }
 
@@ -305,8 +327,8 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  for (const part of chunk(body)) await post(webhook, { content: part });
-  console.log(`Posted: ${must.length} must-fix, ${changes.length} change(s), +${gain.toFixed(1)} proj.`);
+  for (const part of messages) await post(webhook, { content: part });
+  console.log(`Posted ${messages.length} message(s) for ${bodies.length} league(s).`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

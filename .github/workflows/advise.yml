@@ -23,4 +23,4 @@ jobs:
       - name: advise
         run: node advise.mjs
         env:
-          MAKAVELI_WEBHOOK_URL: ${{ secrets.MAKAVELI_WEBHOOK_URL }}
+          LINEUP_WEBHOOK_URL: ${{ secrets.LINEUP_WEBHOOK_URL }}
