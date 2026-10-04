@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { api, chunk, post } from './sync.mjs';
+import { api, chunk, mentionFor, post } from './sync.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -342,6 +342,9 @@ async function main() {
   }
 
   const messages = bodies.flatMap((b) => chunk(b));
+  // Ping once, on the first message — the rest of a long report is the same alert continued.
+  const mention = mentionFor({ discord_id: config.discord_id });
+  if (mention) messages[0] = `${mention}\n${messages[0]}`;
   if (dryRun) {
     console.log(messages.join('\n\n' + '─'.repeat(60) + '\n\n'));
     console.log(`\n[dry run] ${bodies.length} of ${config.leagues.length} league(s) need attention; nothing posted.`);
