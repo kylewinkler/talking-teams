@@ -149,14 +149,15 @@ export function findProblems(slots, starters, players, byes) {
     const p = id && id !== '0' ? players[id] : null;
     if (!p) { problems.push({ level: 'must', slot, text: `${slot} slot is empty` }); return; }
 
-    const who = `${p.first_name} ${p.last_name} (${p.fantasy_positions?.[0] ?? p.position})`;
-    if (!p.team) problems.push({ level: 'must', slot, text: `${who} — no longer on an NFL roster` });
-    else if (byes.has(p.team)) problems.push({ level: 'must', slot, text: `${who} — ${p.team} on bye` });
-    else if (WILL_NOT_PLAY.has(p.injury_status)) {
-      problems.push({ level: 'must', slot, text: `${who} — ${p.injury_status}` });
-    } else if (MONITOR.has(p.injury_status)) {
-      problems.push({ level: 'watch', slot, text: `${who} — ${p.injury_status}` });
-    }
+    // `reason` is what the report prints beside the player; `text` is the standalone sentence.
+    const name = `${p.first_name} ${p.last_name}`;
+    const who = `${name} (${p.fantasy_positions?.[0] ?? p.position})`;
+    const add = (level, reason) =>
+      problems.push({ level, slot, id, name, reason, text: `${who} — ${reason}` });
+    if (!p.team) add('must', 'no longer on an NFL roster');
+    else if (byes.has(p.team)) add('must', `${p.team} on bye`);
+    else if (WILL_NOT_PLAY.has(p.injury_status)) add('must', p.injury_status);
+    else if (MONITOR.has(p.injury_status)) add('watch', p.injury_status);
   });
   return problems;
 }
@@ -175,12 +176,14 @@ export function slotChanges(slots, current, optimal, players, points) {
   // cascading "moves to another slot" churn, so group by eligibility and diff the sets instead.
   const signature = (slot) => eligibleFor(slot).slice().sort().join('/');
   const stillStarting = new Set(optimal.filter(Boolean));
+  const wasStarting = new Set(current.filter((id) => id && id !== '0'));
   const label = (id) => {
     const p = players[id];
     if (!p) return String(id);
     const pos = p.fantasy_positions?.[0] ?? p.position;
     return `${p.first_name} ${p.last_name} (${pos}, ${points(id).toFixed(1)})`;
   };
+  const name = (id) => (players[id] ? `${players[id].first_name} ${players[id].last_name}` : String(id));
 
   const groups = new Map();
   slots.forEach((slot, i) => {
@@ -198,39 +201,87 @@ export function slotChanges(slots, current, optimal, players, points) {
     const incoming = g.optimal.filter((id) => !held.has(id)).sort(byValue);
     const outgoing = g.current.filter((id) => !wanted.has(id)).sort(byValue);
     if (!incoming.length && !outgoing.length) continue;
+
+    // Pair each arrival with a departure so every line reads as one move in the app. Players new to
+    // the lineup come first; a starter sliding over from another slot type is a "move", not a start.
+    const arrivals = [
+      ...incoming.filter((id) => !wasStarting.has(id)),
+      ...incoming.filter((id) => wasStarting.has(id)),
+    ];
+    const benched = outgoing.filter((id) => !stillStarting.has(id));
+    const moves = arrivals.map((id, i) => ({
+      slot: g.slot, start: id, shift: wasStarting.has(id), bench: benched[i] ?? null,
+    }));
+    for (const id of benched.slice(arrivals.length)) moves.push({ slot: g.slot, start: null, bench: id });
+    for (const m of moves) {
+      m.gain = m.start && m.bench ? points(m.start) - points(m.bench) : null;
+      m.startName = m.start && name(m.start);
+      m.benchName = m.bench && name(m.bench);
+    }
+
     changes.push({
       slot: g.slot,
       incoming: incoming.map(label),
       outgoing: outgoing.map((id) => ({ label: label(id), keepsStarting: stillStarting.has(id) })),
+      moves,
     });
   }
   return changes;
 }
 
-/** The Discord message, or null when the lineup is already set and optimal. */
+/**
+ * The Discord message, or null when the lineup is already set and optimal.
+ *
+ * One line per move, with its reason on the same line. A must-fix is folded into the move that
+ * fixes it instead of being repeated in a section of its own, and only stands alone when nobody on
+ * the bench can fix it.
+ */
 export function buildReport({ leagueName, week, must, watch, changes, currentTotal, total }) {
   if (!must.length && !watch.length && !changes.length) return null;
 
-  const lines = [`🏈 **${leagueName}** — week ${week} lineup check`, ''];
-  if (must.length) lines.push('🔴 **Must fix**', ...must.map((p) => ` · ${p.text}`), '');
+  const problemOf = new Map(must.filter((p) => p.id).map((p) => [p.id, p]));
+  const handled = new Set();
+  const lines = [`🏈 **${leagueName}** — week ${week}`, ''];
 
-  if (changes.length) {
-    lines.push(`🟢 **Lineup change** — +${(total - currentTotal).toFixed(1)} projected`);
-    for (const c of changes) {
-      const parts = [];
-      if (c.incoming.length) parts.push(`start ${c.incoming.map((s) => `**${s}**`).join(', ')}`);
-      const bench = c.outgoing.filter((o) => !o.keepsStarting).map((o) => o.label);
-      const moved = c.outgoing.filter((o) => o.keepsStarting).map((o) => o.label);
-      if (bench.length) parts.push(`bench ${bench.join(', ')}`);
-      if (moved.length) parts.push(`${moved.join(', ')} shifts to another slot`);
-      if (!parts.length) continue;
-      lines.push(` · \`${c.slot}\` — ${parts.join('; ')}`);
+  for (const m of changes.flatMap((c) => c.moves ?? [])) {
+    let line = m.start
+      ? m.shift ? `move **${m.startName}** here` : `start **${m.startName}**`
+      : '';
+    if (m.bench) {
+      handled.add(m.bench);
+      const problem = problemOf.get(m.bench);
+      const why = problem ? problem.reason : m.gain !== null && !m.shift ? `+${m.gain.toFixed(1)}` : null;
+      line += `${line ? ', bench' : 'bench'} ${m.benchName}${why ? ` (${why})` : ''}`;
+    } else if (!m.shift) {
+      handled.add(`empty:${m.slot}`);
+      line += ' (empty slot)';
     }
-    lines.push('');
+    lines.push(`• ${m.slot}: ${line}`);
   }
 
-  if (watch.length) lines.push('🟡 **Monitor**', ...watch.map((p) => ` · ${p.text}`), '');
-  lines.push(`_Projected ${currentTotal.toFixed(1)} → ${total.toFixed(1)}_`);
+  for (const p of must) {
+    if (handled.has(p.id ?? `empty:${p.slot}`)) continue;
+    lines.push(
+      p.id
+        ? `• ${p.slot}: ${p.name} — ${p.reason}, and nobody on your bench can replace him`
+        : `• ${p.slot}: empty, and nobody on your bench can fill it`,
+    );
+  }
+
+  if (watch.length) {
+    const byStatus = new Map();
+    for (const p of watch) byStatus.set(p.reason, [...(byStatus.get(p.reason) ?? []), p.name]);
+    lines.push('');
+    for (const [status, names] of byStatus) lines.push(`⚠️ ${status}: ${names.join(', ')}`);
+  }
+
+  const gain = total - currentTotal;
+  lines.push(
+    '',
+    gain >= 0.1
+      ? `+${gain.toFixed(1)} projected points (${total.toFixed(1)} total)`
+      : `${total.toFixed(1)} projected points`,
+  );
   return lines.join('\n').trim();
 }
 
@@ -319,46 +370,56 @@ async function main() {
   const byes = byeTeams(games, week);
   const started = startedTeams(games, week);
 
-  const bodies = [];
-  for (const leagueId of config.leagues) {
-    const [league, rosters] = await Promise.all([
-      api(`/league/${leagueId}`),
-      api(`/league/${leagueId}/rosters`),
-    ]);
-    const roster = rosters.find((r) => r.owner_id === config.user_id);
-    if (!roster) {
-      console.error(`no roster for user ${config.user_id} in ${league.name} — skipped`);
-      continue;
+  // Managers can share leagues, so each league is fetched once however many of them are in it.
+  const leagueCache = new Map();
+  const leagueData = (id) => {
+    if (!leagueCache.has(id)) {
+      leagueCache.set(id, Promise.all([api(`/league/${id}`), api(`/league/${id}/rosters`)]));
     }
-    const audit = auditRoster({ league, roster, players, projections, byes, started });
-    const body = buildReport({ leagueName: league.name, week, ...audit });
-    if (body) bodies.push(body);
-    else console.log(`${league.name}: lineup is set and optimal (${audit.currentTotal.toFixed(1)} proj).`);
-  }
-
-  if (!bodies.length) {
-    console.log(`week ${week}: every lineup is set and optimal, nothing to post.`);
-    return;
-  }
-
-  const messages = bodies.flatMap((b) => chunk(b));
-  // Ping once, on the first message — the rest of a long report is the same alert continued.
-  const mention = mentionFor({ discord_id: config.discord_id });
-  if (mention) messages[0] = `${mention}\n${messages[0]}`;
-  if (dryRun) {
-    console.log(messages.join('\n\n' + '─'.repeat(60) + '\n\n'));
-    console.log(`\n[dry run] ${bodies.length} of ${config.leagues.length} league(s) need attention; nothing posted.`);
-    return;
-  }
+    return leagueCache.get(id);
+  };
 
   const webhook = process.env[config.webhook_env];
-  if (!webhook) {
+  if (!dryRun && !webhook) {
     console.error(`${config.webhook_env} is not set`);
     process.exitCode = 1;
     return;
   }
-  for (const part of messages) await post(webhook, { content: part });
-  console.log(`Posted ${messages.length} message(s) for ${bodies.length} league(s).`);
+
+  // Same audit for every manager; each gets their own post, tagging only them.
+  for (const manager of config.managers) {
+    const bodies = [];
+    for (const leagueId of manager.leagues) {
+      const [league, rosters] = await leagueData(leagueId);
+      const roster = rosters.find((r) => r.owner_id === manager.user_id);
+      if (!roster) {
+        console.error(`${manager.name}: no roster in ${league.name} — skipped`);
+        continue;
+      }
+      const audit = auditRoster({ league, roster, players, projections, byes, started });
+      const body = buildReport({ leagueName: league.name, week, ...audit });
+      if (body) bodies.push(body);
+      else console.log(`${manager.name} · ${league.name}: lineup is set and optimal (${audit.currentTotal.toFixed(1)} proj).`);
+    }
+
+    if (!bodies.length) {
+      console.log(`${manager.name}: every lineup is set and optimal, nothing to post.`);
+      continue;
+    }
+
+    const messages = bodies.flatMap((b) => chunk(b));
+    // Ping once, on the first message — the rest of a long report is the same alert continued.
+    const mention = mentionFor(manager);
+    if (mention) messages[0] = `${mention}\n${messages[0]}`;
+
+    if (dryRun) {
+      console.log(messages.join('\n\n' + '─'.repeat(60) + '\n\n'));
+      console.log(`\n[dry run] ${manager.name}: ${bodies.length} of ${manager.leagues.length} league(s) need attention; nothing posted.\n`);
+      continue;
+    }
+    for (const part of messages) await post(webhook, { content: part });
+    console.log(`${manager.name}: posted ${messages.length} message(s) for ${bodies.length} league(s).`);
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

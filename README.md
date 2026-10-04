@@ -105,10 +105,13 @@ cut — that call is yours.
 
 # Lineup advisor (`advise.mjs`)
 
-A second, unrelated tool in the same repo, covering the three leagues where lineups matter:
-**makaveli**, **illinois Georgia Line** and **My Beautiful Dark Twisted Fantasy League**. (Talking
-Teams is best ball, so only the overall roster matters there.) Runs daily at 12:37 UTC (7:37am CDT) and posts to its own Discord webhook
-(`KYLES_LINEUP_WEBHOOK_URL`). Silent when the lineup is already set and optimal.
+A second, unrelated tool in the same repo, covering the leagues where lineups matter. It runs the
+same audit for each manager listed in [advisor.json](advisor.json) — Kyle (**makaveli**, **illinois
+Georgia Line**, **My Beautiful Dark Twisted Fantasy League**) and Brooke (the latter two) — and gives
+each their own post, tagging only them. (Talking Teams is best ball, so only the overall roster
+matters there.) To add someone, add an entry with their Sleeper `user_id`, Discord `discord_id` and
+`leagues`. Runs daily at 12:37 UTC (7:37am CDT) and posts to its own Discord webhook
+(`KYLES_LINEUP_WEBHOOK_URL`). Silent for anyone whose lineups are already set and optimal.
 
 ```bash
 npm run advise:dry    # print, post nothing

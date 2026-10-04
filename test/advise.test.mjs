@@ -180,3 +180,40 @@ test('no must-fix for a slot that has already kicked off', () => {
   assert.equal(auditRoster({ ...base, started: new Set() }).must.length, 1);
   assert.equal(auditRoster({ ...base, started: new Set(['PHI']) }).must.length, 0);
 });
+
+/* ---------------------------------------------------------------- report ---- */
+
+const report = (starters, roster, pts, slots = ['QB', 'WR']) => {
+  const league = {
+    roster_positions: slots,
+    scoring_settings: { rec: 1 },
+  };
+  const projections = Object.fromEntries(Object.entries(pts).map(([id, v]) => [id, { rec: v }]));
+  const audit = auditRoster({ league, roster: { starters, players: roster }, players: P, projections, byes: new Set() });
+  return buildReport({ leagueName: 'makaveli', week: 4, ...audit });
+};
+
+test('a ruled-out starter is one line: the move that fixes it, with the reason', () => {
+  const body = report(['qb1', 'hurt'], ['qb1', 'hurt', 'wr1'], { qb1: 18, hurt: 15, wr1: 19 }, ['QB', 'FLEX']);
+  assert.match(body, /• FLEX: start \*\*Puka Nacua\*\*, bench Saquon Barkley \(Out\)/);
+  assert.equal(body.match(/Barkley/g).length, 1, 'the problem is not repeated in a section of its own');
+});
+
+test('a projection upgrade shows its own gain, and the total line shows the new total', () => {
+  const body = report(['qb2', 'wr1'], ['qb1', 'qb2', 'wr1'], { qb1: 20, qb2: 17, wr1: 19 });
+  assert.match(body, /• QB: start \*\*Dak Prescott\*\*, bench Jared Goff \(\+3\.0\)/);
+  assert.match(body, /\+3\.0 projected points \(39\.0 total\)$/);
+});
+
+test('an empty slot says so, and an unfixable problem stands alone', () => {
+  const filled = report(['qb1', '0'], ['qb1', 'wr1'], { qb1: 18, wr1: 19 });
+  assert.match(filled, /• WR: start \*\*Puka Nacua\*\* \(empty slot\)/);
+
+  const stuck = report(['qb1', 'hurt'], ['qb1', 'hurt'], { qb1: 18, hurt: 15 }, ['QB', 'RB']);
+  assert.match(stuck, /• RB: Saquon Barkley — Out, and nobody on your bench can replace him/);
+});
+
+test('questionable starters are grouped on one line by status', () => {
+  const body = report(['qb1', 'quest'], ['qb1', 'quest'], { qb1: 18, quest: 12 });
+  assert.match(body, /⚠️ Questionable: Terry McLaurin/);
+});
