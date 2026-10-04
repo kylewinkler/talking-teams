@@ -1,4 +1,4 @@
-name: lineup advisor
+name: kyles lineup advisor
 
 on:
   schedule:
@@ -23,4 +23,4 @@ jobs:
       - name: advise
         run: node advise.mjs
         env:
-          LINEUP_WEBHOOK_URL: ${{ secrets.LINEUP_WEBHOOK_URL }}
+          KYLES_LINEUP_WEBHOOK_URL: ${{ secrets.KYLES_LINEUP_WEBHOOK_URL }}

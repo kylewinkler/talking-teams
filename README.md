@@ -108,7 +108,7 @@ cut — that call is yours.
 A second, unrelated tool in the same repo, covering the three leagues where lineups matter:
 **makaveli**, **illinois Georgia Line** and **My Beautiful Dark Twisted Fantasy League**. (Talking
 Teams is best ball, so only the overall roster matters there.) Runs daily at 12:37 UTC (7:37am CDT) and posts to its own Discord webhook
-(`LINEUP_WEBHOOK_URL`). Silent when the lineup is already set and optimal.
+(`KYLES_LINEUP_WEBHOOK_URL`). Silent when the lineup is already set and optimal.
 
 ```bash
 npm run advise:dry    # print, post nothing
