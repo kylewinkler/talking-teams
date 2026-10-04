@@ -10,6 +10,7 @@ import {
   findProblems,
   slotChanges,
   buildReport,
+  managerPayloads,
   auditRoster,
   startedTeams,
 } from '../advise.mjs';
@@ -216,4 +217,15 @@ test('an empty slot says so, and an unfixable problem stands alone', () => {
 test('questionable starters are grouped on one line by status', () => {
   const body = report(['qb1', 'quest'], ['qb1', 'quest'], { qb1: 18, quest: 12 });
   assert.match(body, /⚠️ Questionable: Terry McLaurin/);
+});
+
+test('each manager gets their own colored cards, one per league, pinged above them', () => {
+  const kyle = { name: 'Kyle', discord_id: '249294515666550785', color: '#f0b232' };
+  const [msg] = managerPayloads(kyle, [
+    { leagueName: 'makaveli', body: '• QB: start **Dak Prescott**' },
+    { leagueName: 'illinois Georgia Line', body: '• WR: start **Puka Nacua**' },
+  ], 4);
+  assert.equal(msg.content, '<@249294515666550785> — lineup check', 'a mention only pings outside an embed');
+  assert.deepEqual(msg.embeds.map((e) => e.title), ['🏈 makaveli — week 4', '🏈 illinois Georgia Line — week 4']);
+  assert.ok(msg.embeds.every((e) => e.color === 0xf0b232));
 });

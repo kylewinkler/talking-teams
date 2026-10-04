@@ -234,14 +234,14 @@ export function slotChanges(slots, current, optimal, players, points) {
  *
  * One line per move, with its reason on the same line. A must-fix is folded into the move that
  * fixes it instead of being repeated in a section of its own, and only stands alone when nobody on
- * the bench can fix it.
+ * the bench can fix it. The league name is the card's title, so it is not repeated here.
  */
-export function buildReport({ leagueName, week, must, watch, changes, currentTotal, total }) {
+export function buildReport({ must, watch, changes, currentTotal, total }) {
   if (!must.length && !watch.length && !changes.length) return null;
 
   const problemOf = new Map(must.filter((p) => p.id).map((p) => [p.id, p]));
   const handled = new Set();
-  const lines = [`🏈 **${leagueName}** — week ${week}`, ''];
+  const lines = [];
 
   for (const m of changes.flatMap((c) => c.moves ?? [])) {
     let line = m.start
@@ -283,6 +283,42 @@ export function buildReport({ leagueName, week, must, watch, changes, currentTot
       : `${total.toFixed(1)} projected points`,
   );
   return lines.join('\n').trim();
+}
+
+const NEUTRAL = 0x99aab5;
+const LIMIT = { description: 4096, embeds: 10, chars: 6000 };
+
+/**
+ * One manager's reports as webhook messages: a card per league in that manager's color, with the
+ * ping on a plain line above them — a mention inside an embed renders but never notifies anyone.
+ * Only the first message carries the ping; an oversized report continues in further cards and,
+ * past one message's budget, further messages.
+ */
+export function managerPayloads(manager, reports, week) {
+  const color = parseInt(String(manager.color ?? '').replace('#', ''), 16);
+  const cards = reports.flatMap(({ leagueName, body }) =>
+    chunk(body, LIMIT.description).map((description, i) => ({
+      title: `🏈 ${leagueName} — week ${week}${i ? ' (cont.)' : ''}`,
+      description,
+      color: Number.isFinite(color) ? color : NEUTRAL,
+    })),
+  );
+
+  const size = (e) => e.title.length + e.description.length;
+  const messages = [];
+  for (const card of cards) {
+    const last = messages.at(-1);
+    const fits =
+      last &&
+      last.embeds.length < LIMIT.embeds &&
+      last.embeds.reduce((t, e) => t + size(e), 0) + size(card) <= LIMIT.chars;
+    if (fits) last.embeds.push(card);
+    else messages.push({ embeds: [card] });
+  }
+
+  const mention = mentionFor(manager);
+  if (messages.length) messages[0].content = `${mention} — lineup check`;
+  return messages;
 }
 
 /* ------------------------------------------------------------------ main ---- */
@@ -388,7 +424,7 @@ async function main() {
 
   // Same audit for every manager; each gets their own post, tagging only them.
   for (const manager of config.managers) {
-    const bodies = [];
+    const reports = [];
     for (const leagueId of manager.leagues) {
       const [league, rosters] = await leagueData(leagueId);
       const roster = rosters.find((r) => r.owner_id === manager.user_id);
@@ -397,28 +433,30 @@ async function main() {
         continue;
       }
       const audit = auditRoster({ league, roster, players, projections, byes, started });
-      const body = buildReport({ leagueName: league.name, week, ...audit });
-      if (body) bodies.push(body);
+      const body = buildReport(audit);
+      if (body) reports.push({ leagueName: league.name, body });
       else console.log(`${manager.name} · ${league.name}: lineup is set and optimal (${audit.currentTotal.toFixed(1)} proj).`);
     }
 
-    if (!bodies.length) {
+    if (!reports.length) {
       console.log(`${manager.name}: every lineup is set and optimal, nothing to post.`);
       continue;
     }
 
-    const messages = bodies.flatMap((b) => chunk(b));
-    // Ping once, on the first message — the rest of a long report is the same alert continued.
-    const mention = mentionFor(manager);
-    if (mention) messages[0] = `${mention}\n${messages[0]}`;
-
+    const messages = managerPayloads(manager, reports, week);
     if (dryRun) {
-      console.log(messages.join('\n\n' + '─'.repeat(60) + '\n\n'));
-      console.log(`\n[dry run] ${manager.name}: ${bodies.length} of ${manager.leagues.length} league(s) need attention; nothing posted.\n`);
+      for (const m of messages) {
+        if (m.content) console.log(m.content, '\n');
+        for (const e of m.embeds) {
+          console.log(`┃ ${e.title}   [#${e.color.toString(16).padStart(6, '0')}]`);
+          console.log(e.description.split('\n').map((l) => `┃ ${l}`).join('\n'), '\n');
+        }
+      }
+      console.log(`[dry run] ${manager.name}: ${reports.length} of ${manager.leagues.length} league(s) need attention; nothing posted.\n`);
       continue;
     }
-    for (const part of messages) await post(webhook, { content: part });
-    console.log(`${manager.name}: posted ${messages.length} message(s) for ${bodies.length} league(s).`);
+    for (const m of messages) await post(webhook, m);
+    console.log(`${manager.name}: posted ${messages.length} message(s) for ${reports.length} league(s).`);
   }
 }
 
